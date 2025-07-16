@@ -20,7 +20,6 @@ char32_t swap32(char32_t cp) {
             ((cp & 0xFF000000) >> 24);
 }
 
-
 int isvalid_u8(const unsigned char *u8_str, int allow_surrogate) {
     const unsigned char *u8 = u8_str;
     while (*u8) {
@@ -49,38 +48,49 @@ int isvalid_u8(const unsigned char *u8_str, int allow_surrogate) {
 int isvalid_cp(codepoint cp) {
     return cp <= 0x10FFFF && (cp < 0xD800 || cp > 0xDFFF);
 }
-void next_codepoint(){}
-void prev_codepoint(){}
+
+void next_codepoint(unsigned char **u8) {
+    unsigned char *pos = *u8;
+    if (!*pos)
+        return;
+    while ((*++pos & 0xC0) == 0x80) {}
+    *u8 = pos;
+}
+void prev_codepoint(unsigned char **u8, const unsigned char *buf_start) {
+    unsigned char *pos = *u8;
+    if (pos <= buf_start)
+        return;
+    while (pos > buf_start && (*pos-- & 0xC0) == 0x80){} //moves to
+    //one pos behind the start of the input codepoint.
+    while (pos > buf_start && (*pos & 0xC0) == 0x80) {
+        pos--;
+    } //moves to start of the prev codepoint
+    *u8 = pos;
+}
+void curr_codepoint(unsigned char **u8, const unsigned char *buf_start) {
+    unsigned char *pos = *u8;
+    while (pos > buf_start && (*pos & 0xC0) == 0x80) {
+        pos--;
+    }
+    *u8 = pos;
+}
+
 
 ssize_t u8_to_cp(const unsigned char *u8_str, codepoint *cp_buf, size_t bufsiz) {
-    // u8_str must be Null Terminated.
+    // u8_str must be a prevalidated, Null terminated, utf8 string.
     const unsigned char *u8 = u8_str;
     ssize_t i = 0;
     for (; *u8 && i < (bufsiz - 1); i++) {
-        codepoint cp = 0;
-        // start byte:
-        if ((*u8 & 0xC0) == 0x80 || is_forbidden_byte(*u8))
-            return -1; //invalid or continuation at the start of byte
-        int bytes = u8_byte_count(*u8);
+        const int bytes = u8_byte_count(*u8);
+        if ((*u8 & 0xC0) == 0x80)
+            return -1; //invalid start byte, sanity-check to stop total garbage
 
-        for (int j = 1; j < bytes; j++) {
-            if ((u8[j] & 0xC0) != 0x80)
-                return -1; //invalid continuation byte
-        }
-        if (u8char_to_cp(&cp, u8, bytes) != 1)
-            return -1; //out of range or overlong
+        codepoint cp = u8char_to_cp(u8, bytes);
         cp_buf[i] = cp;
         u8 += bytes;
     }
     cp_buf[i] = 0x00; //null terminate the cp buffer
-    return i;
-}
-int is_forbidden_byte(unsigned char u8c) {
-    return (u8c == 0xC0) || (u8c == 0xC1) || (u8c >= 0xF5);
-    // for the first byte, 0xC0 and 0xC1 are overlong
-    // and >=0xF5 is out-of-range, this is just for
-    //early-exit, both overlong and bounds are checked
-    // in u8char_to_cp.
+    return i; //return no of written codepoints
 }
 
 int u8_byte_count(unsigned char u8c) {
@@ -90,48 +100,38 @@ int u8_byte_count(unsigned char u8c) {
     int b3 = (u8c >> 4) & 0x01;
     return 1 + b0*b1 + b0*b1*b2 + b0*b1*b2*b3;
 }
-int u8char_to_cp(codepoint *cp, const unsigned char *u8, int bytes) {
+codepoint u8char_to_cp(const unsigned char *u8, int bytes) {
     // -1 for invalid, 0 for overlong, 1 for valid.
+    codepoint cp;
     switch (bytes) {
         case 1: {
-            *cp = *u8 & 0x7F;
+            cp = *u8 & 0x7F;
             break;
         }
         case 2: {
-            *cp = ((u8[0] & 0x1F) << 6)
+            cp = ((u8[0] & 0x1F) << 6)
             | (u8[1] & 0x3F);
-            if (*cp < 0x80)
-                return 0;
             break;
         }
         case 3: {
-            *cp = ((u8[0] & 0x0F) << 12)
+            cp = ((u8[0] & 0x0F) << 12)
             | ((u8[1] & 0x3F) << 6)
             | (u8[2] & 0x3F);
-            if (*cp < 0x0800)
-                return 0;
-            if (*cp >= 0xD800 && *cp <= 0xDFFF)
-                return -1;
             break;
         }
         case 4:{
-            *cp = ((u8[0] & 0x07) << 18)
+            cp = ((u8[0] & 0x07) << 18)
             | ((u8[1] & 0x3F) << 12)
             | ((u8[2] & 0x3F) << 6)
             | (u8[3] & 0x3F);
-            if (*cp < 0x010000)
-                return 0;
-            if (*cp > 0x10FFFF)
-                return -1;
             break;
 
         }
         default:
-            return -1;
+            cp = 0;//not possible
     }
-    return 1;
+    return cp;
 }
-
 
 ssize_t cp_to_u8(const codepoint *codepoints, size_t size, unsigned char *u8_buf, size_t bufsiz) {
     ssize_t i = 0, j = 0;
@@ -169,23 +169,11 @@ ssize_t cp_to_u8(const codepoint *codepoints, size_t size, unsigned char *u8_buf
     //bytes successfully written to buffer can be strlen'ed.
 }
 
-
-
-void print_cp() {
-    is_little_endian();
+size_t u8_strlen(const unsigned char *u8) {
+    size_t strlen = 0;
+    while (*u8++) {
+        if ((*u8 & 0xC0) != 0x80)
+            strlen++;
+    }
+    return strlen;
 }
-/* substring search
- * byte-based and code point based
- * strcmp
- * strlen
- * Normalization NFC/NFD
- * Case Folding */
-
-
-/*Formally, Unicode defines a codespace of values in the range 0 to 0x10FFFF inclusive,
- *and a Unicode codepoint is any integer falling within that range.
- *However, due to historical reasons, it became necessary to "carve out" a subset of the codespace,
- *excluding codepoints in the range 0xD7FF–0xE000. That subset of codepoints excluding that range
- *are known as Unicode scalar values. The codepoints in the range 0xD7FF-0xE000 are known as "surrogate" codepoints.
- *The surrogate codepoints will never be assigned a semantic meaning, and can only validly appear
- *in UTF-16 encoded text. */
