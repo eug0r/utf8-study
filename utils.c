@@ -50,10 +50,11 @@ int isvalid_cp(codepoint cp) {
 }
 
 void next_codepoint(unsigned char **u8) {
+    //doesn't assume a start-byte is passed in
     unsigned char *pos = *u8;
     if (!*pos)
         return;
-    while ((*++pos & 0xC0) == 0x80) {}
+    while ((*++pos & 0xC0) == 0x80) {} //stops at start-byte or NULL-byte.
     *u8 = pos;
 }
 void prev_codepoint(unsigned char **u8, const unsigned char *buf_start) {
@@ -81,10 +82,10 @@ ssize_t u8_to_cp(const unsigned char *u8_str, codepoint *cp_buf, size_t bufsiz) 
     const unsigned char *u8 = u8_str;
     ssize_t i = 0;
     for (; *u8 && i < (bufsiz - 1); i++) {
-        const int bytes = u8_byte_count(*u8);
         if ((*u8 & 0xC0) == 0x80)
             return -1; //invalid start byte, sanity-check to stop total garbage
 
+        const int bytes = u8_byte_count(*u8);
         codepoint cp = u8char_to_cp(u8, bytes);
         cp_buf[i] = cp;
         u8 += bytes;
